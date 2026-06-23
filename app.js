@@ -382,7 +382,7 @@
         return currentVideoId ? bookmark.videoId === currentVideoId : false;
       })
       .sort(function (a, b) {
-        return a.timeSeconds - b.timeSeconds;
+        return getBookmarkCreatedAtMs(b) - getBookmarkCreatedAtMs(a);
       });
 
     elements.bookmarkList.innerHTML = "";
