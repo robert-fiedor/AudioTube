@@ -7,6 +7,7 @@
     positions: "ytab:lastPositionByVideo",
     history: "ytab:videoHistory"
   };
+  const SNOOZE_DURATION_MS = 30 * 60 * 1000;
 
   let player = null;
   let playerReady = false;
@@ -20,6 +21,8 @@
   let pendingSeekSeconds = null;
   let pendingVideoId = null;
   let pendingShouldPlay = false;
+  let snoozeTimerId = null;
+  let snoozeEndsAt = 0;
 
   const elements = {};
 
@@ -293,15 +296,28 @@
       return;
     }
 
-    const currentTime = canUsePlayerMethod("getCurrentTime")
-      ? getReliableCurrentTime()
-      : loadLastPosition(currentVideoId) || 0;
-    const duration = canUsePlayerMethod("getDuration") ? player.getDuration() : 0;
-    let nextTime = Math.max(0, currentTime + (30 * 60));
-    if (duration > 0) {
-      nextTime = Math.min(duration, nextTime);
+    clearSnoozeTimer();
+    snoozeEndsAt = Date.now() + SNOOZE_DURATION_MS;
+    snoozeTimerId = window.setTimeout(runSnoozePause, SNOOZE_DURATION_MS);
+    showStatus("");
+  }
+
+  function clearSnoozeTimer() {
+    if (snoozeTimerId !== null) {
+      window.clearTimeout(snoozeTimerId);
+      snoozeTimerId = null;
     }
-    loadVideo(currentVideoId, nextTime, false);
+    snoozeEndsAt = 0;
+  }
+
+  function runSnoozePause() {
+    snoozeTimerId = null;
+    snoozeEndsAt = 0;
+    if (canUsePlayerMethod("pauseVideo")) {
+      player.pauseVideo();
+    }
+    postPlayerCommand("pauseVideo");
+    saveLastPosition();
   }
 
   function addBookmark() {
