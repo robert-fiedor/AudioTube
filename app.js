@@ -7,7 +7,7 @@
     positions: "ytab:lastPositionByVideo",
     history: "ytab:videoHistory"
   };
-  const SNOOZE_DURATION_MS = 30 * 60 * 1000;
+  const MAX_BOOKMARKS = 3;
 
   let player = null;
   let playerReady = false;
@@ -21,8 +21,6 @@
   let pendingSeekSeconds = null;
   let pendingVideoId = null;
   let pendingShouldPlay = false;
-  let snoozeTimerId = null;
-  let snoozeEndsAt = 0;
 
   const elements = {};
 
@@ -62,7 +60,6 @@
     elements.videoInput = document.getElementById("video-input");
     elements.loadVideo = document.getElementById("load-video");
     elements.playPause = document.getElementById("play-pause");
-    elements.snooze = document.getElementById("snooze");
     elements.back30 = document.getElementById("back-30");
     elements.back10 = document.getElementById("back-10");
     elements.forward10 = document.getElementById("forward-10");
@@ -88,7 +85,6 @@
       }
     });
     elements.playPause.addEventListener("click", playPause);
-    elements.snooze.addEventListener("click", snooze);
     elements.back30.addEventListener("click", function () {
       seekBy(-30);
     });
@@ -290,36 +286,6 @@
     updateCurrentTime();
   }
 
-  function snooze() {
-    if (!currentVideoId) {
-      showStatus("Load a video first.");
-      return;
-    }
-
-    clearSnoozeTimer();
-    snoozeEndsAt = Date.now() + SNOOZE_DURATION_MS;
-    snoozeTimerId = window.setTimeout(runSnoozePause, SNOOZE_DURATION_MS);
-    showStatus("");
-  }
-
-  function clearSnoozeTimer() {
-    if (snoozeTimerId !== null) {
-      window.clearTimeout(snoozeTimerId);
-      snoozeTimerId = null;
-    }
-    snoozeEndsAt = 0;
-  }
-
-  function runSnoozePause() {
-    snoozeTimerId = null;
-    snoozeEndsAt = 0;
-    if (canUsePlayerMethod("pauseVideo")) {
-      player.pauseVideo();
-    }
-    postPlayerCommand("pauseVideo");
-    saveLastPosition();
-  }
-
   function addBookmark() {
     if (!currentVideoId) {
       showStatus("Load a video first.");
@@ -340,6 +306,7 @@
     };
 
     bookmarks.push(bookmark);
+    bookmarks = getMostRecentBookmarks(bookmarks, MAX_BOOKMARKS);
     saveBookmarks();
     renderBookmarks();
     showStatus("");
@@ -383,7 +350,30 @@
 
   function loadBookmarks() {
     const saved = getStoredJson(STORAGE_KEYS.bookmarks, []);
-    return Array.isArray(saved) ? saved : [];
+    const storedBookmarks = Array.isArray(saved) ? saved : [];
+    const recentBookmarks = getMostRecentBookmarks(storedBookmarks, MAX_BOOKMARKS);
+    if (recentBookmarks.length !== storedBookmarks.length) {
+      setStoredJson(STORAGE_KEYS.bookmarks, recentBookmarks);
+    }
+    return recentBookmarks;
+  }
+
+  function getMostRecentBookmarks(items, limit) {
+    return items
+      .slice()
+      .sort(function (a, b) {
+        return getBookmarkCreatedAtMs(b) - getBookmarkCreatedAtMs(a);
+      })
+      .slice(0, limit);
+  }
+
+  function getBookmarkCreatedAtMs(bookmark) {
+    const created = Date.parse(bookmark && bookmark.createdAt);
+    if (Number.isFinite(created)) {
+      return created;
+    }
+    const idTime = Number(String(bookmark && bookmark.id || "").replace("bookmark_", ""));
+    return Number.isFinite(idTime) ? idTime : 0;
   }
 
   function renderBookmarks() {

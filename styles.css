@@ -62,6 +62,7 @@ input:focus-visible {
 
 button.primary-action,
 #load-video,
+#back-30,
 #add-bookmark {
   color: #06111f;
   background: var(--primary);
@@ -155,10 +156,6 @@ input {
 }
 
 .skip-grid .primary-action {
-  grid-column: 1 / -1;
-}
-
-#snooze {
   grid-column: 1 / -1;
 }
 
@@ -333,8 +330,7 @@ input {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .skip-grid .primary-action,
-  #snooze {
+  .skip-grid .primary-action {
     grid-column: auto;
   }
 
