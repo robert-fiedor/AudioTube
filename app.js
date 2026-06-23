@@ -4,7 +4,8 @@
   const STORAGE_KEYS = {
     lastVideoId: "ytab:lastVideoId",
     bookmarks: "ytab:bookmarks",
-    positions: "ytab:lastPositionByVideo"
+    positions: "ytab:lastPositionByVideo",
+    history: "ytab:videoHistory"
   };
 
   let player = null;
@@ -12,6 +13,7 @@
   let currentVideoId = null;
   let bookmarks = [];
   let positionsByVideo = {};
+  let videoHistory = [];
   let storageAvailable = true;
   let youtubeApiReady = false;
   let pendingSeekSeconds = null;
@@ -37,10 +39,15 @@
     storageAvailable = checkStorage();
     bookmarks = loadBookmarks();
     positionsByVideo = loadPositions();
+    videoHistory = loadVideoHistory();
     currentVideoId = getStoredValue(STORAGE_KEYS.lastVideoId) || null;
 
     bindEvents();
+    if (currentVideoId) {
+      elements.videoInput.value = currentVideoId;
+    }
     renderBookmarks();
+    renderVideoHistory();
     updateVideoTitle();
     loadYouTubeApi();
 
@@ -56,12 +63,19 @@
     elements.videoInput = document.getElementById("video-input");
     elements.loadVideo = document.getElementById("load-video");
     elements.playPause = document.getElementById("play-pause");
+    elements.snooze = document.getElementById("snooze");
     elements.back30 = document.getElementById("back-30");
     elements.back10 = document.getElementById("back-10");
     elements.forward10 = document.getElementById("forward-10");
     elements.forward30 = document.getElementById("forward-30");
     elements.addBookmark = document.getElementById("add-bookmark");
     elements.bookmarkList = document.getElementById("bookmark-list");
+    elements.lastPlayedTab = document.getElementById("last-played-tab");
+    elements.historyTab = document.getElementById("history-tab");
+    elements.lastPlayedPanel = document.getElementById("last-played-panel");
+    elements.historyPanel = document.getElementById("history-panel");
+    elements.lastPlayedList = document.getElementById("last-played-list");
+    elements.historyList = document.getElementById("history-list");
     elements.currentTime = document.getElementById("current-time");
     elements.status = document.getElementById("status-message");
     elements.currentVideoTitle = document.getElementById("current-video-title");
@@ -75,6 +89,7 @@
       }
     });
     elements.playPause.addEventListener("click", playPause);
+    elements.snooze.addEventListener("click", snooze);
     elements.back30.addEventListener("click", function () {
       seekBy(-30);
     });
@@ -88,6 +103,12 @@
       seekBy(30);
     });
     elements.addBookmark.addEventListener("click", addBookmark);
+    elements.lastPlayedTab.addEventListener("click", function () {
+      setActiveTab("last");
+    });
+    elements.historyTab.addEventListener("click", function () {
+      setActiveTab("history");
+    });
   }
 
   function loadYouTubeApi() {
@@ -101,13 +122,19 @@
     document.head.appendChild(script);
   }
 
-  function onPlayerReady() {
+  function onPlayerReady(event) {
+    if (event && event.target) {
+      player = event.target;
+    }
     playerReady = true;
     applyPendingPlayback();
     updateCurrentTime();
   }
 
   function onPlayerStateChange(event) {
+    if (event && event.target) {
+      player = event.target;
+    }
     updatePlayPauseLabel(event.data);
     applyPendingPlayback();
   }
@@ -128,7 +155,12 @@
     pendingSeekSeconds = safeStart;
     pendingShouldPlay = shouldPlay;
     saveCurrentVideo();
+    elements.currentTime.textContent = formatTime(safeStart);
+    positionsByVideo[videoId] = safeStart;
+    setStoredJson(STORAGE_KEYS.positions, positionsByVideo);
+    upsertVideoHistory(videoId, getStoredVideoTitle(videoId), safeStart);
     renderBookmarks();
+    renderVideoHistory();
     updateVideoTitle();
     showStatus("");
 
@@ -235,6 +267,23 @@
     updateCurrentTime();
   }
 
+  function snooze() {
+    if (!currentVideoId) {
+      showStatus("Load a video first.");
+      return;
+    }
+
+    const currentTime = canUsePlayerMethod("getCurrentTime")
+      ? player.getCurrentTime()
+      : loadLastPosition(currentVideoId) || 0;
+    const duration = canUsePlayerMethod("getDuration") ? player.getDuration() : 0;
+    let nextTime = Math.max(0, currentTime + (30 * 60));
+    if (duration > 0) {
+      nextTime = Math.min(duration, nextTime);
+    }
+    loadVideo(currentVideoId, nextTime, false);
+  }
+
   function addBookmark() {
     if (!currentVideoId) {
       showStatus("Load a video first.");
@@ -337,7 +386,7 @@
 
       const goButton = document.createElement("button");
       goButton.type = "button";
-      goButton.textContent = "Jump to Bookmark";
+      goButton.textContent = "Jump to";
       goButton.addEventListener("click", function () {
         jumpToBookmark(bookmark.id);
       });
@@ -345,7 +394,7 @@
       const deleteButton = document.createElement("button");
       deleteButton.type = "button";
       deleteButton.className = "danger";
-      deleteButton.textContent = "Delete Bookmark";
+      deleteButton.textContent = "Delete";
       deleteButton.addEventListener("click", function () {
         deleteBookmark(bookmark.id);
       });
@@ -377,19 +426,22 @@
   }
 
   function updateCurrentTime() {
-    if (!playerReady || !player || typeof player.getCurrentTime !== "function") {
-      elements.currentTime.textContent = "00:00";
+    if (!playerReady || !canUsePlayerMethod("getCurrentTime")) {
+      elements.currentTime.textContent = currentVideoId ? formatTime(loadLastPosition(currentVideoId)) : "00:00";
+      syncCurrentVideoTitleFromPlayer();
       return;
     }
     elements.currentTime.textContent = formatTime(player.getCurrentTime());
+    syncCurrentVideoTitleFromPlayer();
   }
 
   function saveLastPosition() {
-    if (!playerReady || !currentVideoId || !player || typeof player.getCurrentTime !== "function") {
+    if (!playerReady || !currentVideoId || !canUsePlayerMethod("getCurrentTime")) {
       return;
     }
     positionsByVideo[currentVideoId] = Math.floor(player.getCurrentTime() || 0);
     setStoredJson(STORAGE_KEYS.positions, positionsByVideo);
+    upsertVideoHistory(currentVideoId, getCurrentDisplayTitle(), positionsByVideo[currentVideoId]);
   }
 
   function loadLastPosition(videoId) {
@@ -409,16 +461,13 @@
   }
 
   function loadPlayerVideo(videoId, startSeconds, shouldPlay) {
-    if (!playerReady) {
+    if (!playerReady || !canUsePlayerMethod("loadVideoById")) {
       ensurePlayerElement(videoId, startSeconds);
       return;
     }
 
-    if (!shouldPlay && typeof player.cueVideoById === "function") {
-      player.cueVideoById({
-        videoId: videoId,
-        startSeconds: startSeconds
-      });
+    if (!shouldPlay) {
+      attachPlayer(videoId, startSeconds);
       return;
     }
 
@@ -432,7 +481,7 @@
   }
 
   function applyPendingPlayback() {
-    if (!playerReady || !player || pendingSeekSeconds === null) {
+    if (!playerReady || !canUsePlayerMethod("seekTo") || pendingSeekSeconds === null) {
       return;
     }
     if (pendingVideoId && pendingVideoId !== currentVideoId) {
@@ -459,6 +508,139 @@
       setStoredValue(STORAGE_KEYS.lastVideoId, currentVideoId);
       elements.videoInput.value = currentVideoId;
     }
+  }
+
+  function loadVideoHistory() {
+    const saved = getStoredJson(STORAGE_KEYS.history, []);
+    return Array.isArray(saved) ? saved.filter(isValidHistoryItem) : [];
+  }
+
+  function saveVideoHistory() {
+    setStoredJson(STORAGE_KEYS.history, videoHistory);
+  }
+
+  function isValidHistoryItem(item) {
+    return item && typeof item.videoId === "string" && item.videoId.length === 11;
+  }
+
+  function upsertVideoHistory(videoId, title, lastPosition) {
+    if (!videoId) {
+      return;
+    }
+
+    const existing = videoHistory.find(function (item) {
+      return item.videoId === videoId;
+    });
+    const now = new Date().toISOString();
+    const nextTitle = title && title !== "YouTube video player" ? title : videoId;
+    const nextPosition = Math.max(0, Math.floor(Number(lastPosition) || 0));
+
+    if (existing) {
+      existing.title = nextTitle || existing.title || videoId;
+      existing.lastPosition = nextPosition;
+      existing.updatedAt = now;
+    } else {
+      videoHistory.push({
+        videoId: videoId,
+        title: nextTitle || videoId,
+        lastPosition: nextPosition,
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+
+    videoHistory.sort(function (a, b) {
+      return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+    });
+    videoHistory = videoHistory.slice(0, 50);
+    saveVideoHistory();
+    renderVideoHistory();
+  }
+
+  function getStoredVideoTitle(videoId) {
+    const item = videoHistory.find(function (historyItem) {
+      return historyItem.videoId === videoId;
+    });
+    return item ? item.title : videoId;
+  }
+
+  function getCurrentDisplayTitle() {
+    const iframe = document.getElementById("player");
+    if (iframe && iframe.title && iframe.title !== "YouTube video player") {
+      return iframe.title;
+    }
+    return getStoredVideoTitle(currentVideoId);
+  }
+
+  function syncCurrentVideoTitleFromPlayer() {
+    if (!currentVideoId) {
+      return;
+    }
+    const title = getCurrentDisplayTitle();
+    if (!title || title === currentVideoId) {
+      return;
+    }
+    if (title === getStoredVideoTitle(currentVideoId)) {
+      elements.currentVideoTitle.textContent = title;
+      return;
+    }
+    elements.currentVideoTitle.textContent = title;
+    upsertVideoHistory(currentVideoId, title, getCurrentPositionForHistory());
+  }
+
+  function getCurrentPositionForHistory() {
+    if (playerReady && canUsePlayerMethod("getCurrentTime")) {
+      return Math.floor(player.getCurrentTime() || 0);
+    }
+    const historyItem = videoHistory.find(function (item) {
+      return item.videoId === currentVideoId;
+    });
+    return historyItem ? historyItem.lastPosition : loadLastPosition(currentVideoId);
+  }
+
+  function renderVideoHistory() {
+    renderVideoList(elements.lastPlayedList, videoHistory.slice(0, 1));
+    renderVideoList(elements.historyList, videoHistory);
+  }
+
+  function renderVideoList(listElement, videos) {
+    listElement.innerHTML = "";
+    videos.forEach(function (video) {
+      const item = document.createElement("li");
+      item.className = "video-item";
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "video-history-button";
+      button.addEventListener("click", function () {
+        loadVideo(video.videoId, video.lastPosition || 0, false);
+        setActiveTab("last");
+      });
+
+      const title = document.createElement("span");
+      title.className = "video-history-title";
+      title.textContent = video.title || video.videoId;
+
+      const time = document.createElement("span");
+      time.className = "video-history-time";
+      time.textContent = formatTime(video.lastPosition || 0);
+
+      button.append(title, time);
+      item.appendChild(button);
+      listElement.appendChild(item);
+    });
+  }
+
+  function setActiveTab(tabName) {
+    const showHistory = tabName === "history";
+    elements.lastPlayedTab.classList.toggle("active", !showHistory);
+    elements.historyTab.classList.toggle("active", showHistory);
+    elements.lastPlayedTab.setAttribute("aria-selected", String(!showHistory));
+    elements.historyTab.setAttribute("aria-selected", String(showHistory));
+    elements.lastPlayedPanel.hidden = showHistory;
+    elements.historyPanel.hidden = !showHistory;
+    elements.lastPlayedPanel.classList.toggle("active", !showHistory);
+    elements.historyPanel.classList.toggle("active", showHistory);
   }
 
   function ensurePlayerElement(videoId, startSeconds) {
@@ -507,7 +689,7 @@
   }
 
   function updateVideoTitle() {
-    elements.currentVideoTitle.textContent = currentVideoId ? "Current video: " + currentVideoId : "No video loaded";
+    elements.currentVideoTitle.textContent = currentVideoId ? getStoredVideoTitle(currentVideoId) : "No video loaded";
   }
 
   function updatePlayPauseLabel(playerState) {
@@ -524,6 +706,10 @@
       return false;
     }
     return true;
+  }
+
+  function canUsePlayerMethod(methodName) {
+    return Boolean(player && typeof player[methodName] === "function");
   }
 
   function showStatus(message) {

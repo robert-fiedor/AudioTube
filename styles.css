@@ -157,6 +157,10 @@ input {
   grid-column: 1 / -1;
 }
 
+#snooze {
+  grid-column: 1 / -1;
+}
+
 .time-readout {
   margin-top: 12px;
   color: var(--muted);
@@ -177,7 +181,7 @@ input {
 
 .bookmark-list {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   margin: 12px 0 0;
   padding: 0;
   list-style: none;
@@ -191,21 +195,22 @@ input {
 
 .bookmark-item {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 10px;
+  padding: 6px;
   background: #fbfcfd;
 }
 
 .bookmark-jump {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   width: 100%;
-  min-height: 44px;
+  min-height: 34px;
   border-color: transparent;
   padding: 0;
   color: var(--ink);
@@ -226,7 +231,65 @@ input {
 .bookmark-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+
+.bookmark-actions button {
+  min-height: 34px;
+  padding: 0.38rem 0.5rem;
+  font-size: 0.9rem;
+}
+
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.tab-button {
+  border-color: var(--line);
+  color: var(--muted);
+  background: #fbfcfd;
+}
+
+.tab-button.active {
+  border-color: var(--primary);
+  color: #ffffff;
+  background: var(--primary);
+}
+
+.tab-panel {
+  margin-top: 10px;
+}
+
+.video-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.video-history-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 40px;
+  padding: 0.5rem 0.65rem;
+  text-align: left;
+}
+
+.video-history-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-history-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .player-section {
@@ -260,10 +323,11 @@ input {
   }
 
   .skip-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .skip-grid .primary-action {
+  .skip-grid .primary-action,
+  #snooze {
     grid-column: auto;
   }
 
