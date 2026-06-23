@@ -1,0 +1,582 @@
+(function () {
+  "use strict";
+
+  const STORAGE_KEYS = {
+    lastVideoId: "ytab:lastVideoId",
+    bookmarks: "ytab:bookmarks",
+    positions: "ytab:lastPositionByVideo"
+  };
+
+  let player = null;
+  let playerReady = false;
+  let currentVideoId = null;
+  let bookmarks = [];
+  let positionsByVideo = {};
+  let storageAvailable = true;
+  let youtubeApiReady = false;
+  let pendingSeekSeconds = null;
+  let pendingVideoId = null;
+  let pendingShouldPlay = false;
+
+  const elements = {};
+
+  window.onYouTubeIframeAPIReady = function () {
+    youtubeApiReady = true;
+    if (currentVideoId) {
+      const startSeconds = pendingVideoId === currentVideoId && pendingSeekSeconds !== null
+        ? pendingSeekSeconds
+        : loadLastPosition(currentVideoId);
+      attachPlayer(currentVideoId, startSeconds);
+    }
+  };
+
+  document.addEventListener("DOMContentLoaded", init);
+
+  function init() {
+    cacheElements();
+    storageAvailable = checkStorage();
+    bookmarks = loadBookmarks();
+    positionsByVideo = loadPositions();
+    currentVideoId = getStoredValue(STORAGE_KEYS.lastVideoId) || null;
+
+    bindEvents();
+    renderBookmarks();
+    updateVideoTitle();
+    loadYouTubeApi();
+
+    if (!storageAvailable) {
+      showStatus("Bookmarks may not persist in this browser.");
+    }
+
+    setInterval(updateCurrentTime, 750);
+    setInterval(saveLastPosition, 5000);
+  }
+
+  function cacheElements() {
+    elements.videoInput = document.getElementById("video-input");
+    elements.loadVideo = document.getElementById("load-video");
+    elements.playPause = document.getElementById("play-pause");
+    elements.back30 = document.getElementById("back-30");
+    elements.back10 = document.getElementById("back-10");
+    elements.forward10 = document.getElementById("forward-10");
+    elements.forward30 = document.getElementById("forward-30");
+    elements.addBookmark = document.getElementById("add-bookmark");
+    elements.bookmarkList = document.getElementById("bookmark-list");
+    elements.currentTime = document.getElementById("current-time");
+    elements.status = document.getElementById("status-message");
+    elements.currentVideoTitle = document.getElementById("current-video-title");
+  }
+
+  function bindEvents() {
+    elements.loadVideo.addEventListener("click", loadVideoFromInput);
+    elements.videoInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        loadVideoFromInput();
+      }
+    });
+    elements.playPause.addEventListener("click", playPause);
+    elements.back30.addEventListener("click", function () {
+      seekBy(-30);
+    });
+    elements.back10.addEventListener("click", function () {
+      seekBy(-10);
+    });
+    elements.forward10.addEventListener("click", function () {
+      seekBy(10);
+    });
+    elements.forward30.addEventListener("click", function () {
+      seekBy(30);
+    });
+    elements.addBookmark.addEventListener("click", addBookmark);
+  }
+
+  function loadYouTubeApi() {
+    if (window.YT && window.YT.Player) {
+      window.onYouTubeIframeAPIReady();
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://www.youtube.com/iframe_api";
+    document.head.appendChild(script);
+  }
+
+  function onPlayerReady() {
+    playerReady = true;
+    applyPendingPlayback();
+    updateCurrentTime();
+  }
+
+  function onPlayerStateChange(event) {
+    updatePlayPauseLabel(event.data);
+    applyPendingPlayback();
+  }
+
+  function loadVideoFromInput() {
+    const videoInfo = extractVideoInfo(elements.videoInput.value);
+    if (!videoInfo.videoId) {
+      showStatus("Could not find a YouTube video ID. Paste a YouTube URL or video ID.");
+      return;
+    }
+    loadVideo(videoInfo.videoId, videoInfo.startSeconds, false);
+  }
+
+  function loadVideo(videoId, startSeconds, shouldPlay) {
+    const safeStart = Math.max(0, Math.floor(Number(startSeconds) || 0));
+    currentVideoId = videoId;
+    pendingVideoId = videoId;
+    pendingSeekSeconds = safeStart;
+    pendingShouldPlay = shouldPlay;
+    saveCurrentVideo();
+    renderBookmarks();
+    updateVideoTitle();
+    showStatus("");
+
+    if (!youtubeApiReady) {
+      ensurePlayerElement(videoId, safeStart);
+      return;
+    }
+
+    if (!player) {
+      attachPlayer(videoId, safeStart);
+      return;
+    }
+
+    loadPlayerVideo(videoId, safeStart, shouldPlay);
+  }
+
+  function extractVideoInfo(input) {
+    const value = String(input || "").trim();
+    const info = {
+      videoId: null,
+      startSeconds: 0
+    };
+
+    if (/^[a-zA-Z0-9_-]{11}$/.test(value)) {
+      info.videoId = value;
+      return info;
+    }
+
+    try {
+      const url = new URL(value);
+      if (url.hostname.includes("youtu.be")) {
+        info.videoId = cleanVideoId(url.pathname.slice(1));
+      } else if (url.searchParams.has("v")) {
+        info.videoId = cleanVideoId(url.searchParams.get("v"));
+      } else {
+        const embedMatch = url.pathname.match(/\/embed\/([a-zA-Z0-9_-]{11})/);
+        if (embedMatch) {
+          info.videoId = embedMatch[1];
+        }
+      }
+
+      info.startSeconds = parseTimeParam(url.searchParams.get("t") || url.searchParams.get("start"));
+    } catch (error) {
+      info.videoId = null;
+    }
+
+    return info;
+  }
+
+  function extractVideoId(input) {
+    return extractVideoInfo(input).videoId;
+  }
+
+  function cleanVideoId(value) {
+    const match = String(value || "").match(/[a-zA-Z0-9_-]{11}/);
+    return match ? match[0] : null;
+  }
+
+  function parseTimeParam(value) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      return 0;
+    }
+    if (/^\d+$/.test(raw)) {
+      return Number(raw);
+    }
+
+    const match = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+    if (!match) {
+      return 0;
+    }
+
+    const hours = Number(match[1] || 0);
+    const minutes = Number(match[2] || 0);
+    const seconds = Number(match[3] || 0);
+    return (hours * 3600) + (minutes * 60) + seconds;
+  }
+
+  function playPause() {
+    if (!ensurePlayerReady()) {
+      return;
+    }
+
+    const state = player.getPlayerState();
+    if (state === YT.PlayerState.PLAYING) {
+      player.pauseVideo();
+    } else {
+      player.playVideo();
+    }
+  }
+
+  function seekBy(seconds) {
+    if (!ensurePlayerReady()) {
+      return;
+    }
+
+    const currentTime = player.getCurrentTime() || 0;
+    const duration = player.getDuration() || 0;
+    let nextTime = Math.max(0, currentTime + seconds);
+    if (duration > 0) {
+      nextTime = Math.min(duration, nextTime);
+    }
+    player.seekTo(nextTime, true);
+    updateCurrentTime();
+  }
+
+  function addBookmark() {
+    if (!currentVideoId) {
+      showStatus("Load a video first.");
+      return;
+    }
+    if (!ensurePlayerReady()) {
+      return;
+    }
+
+    const timeSeconds = Math.floor(player.getCurrentTime() || 0);
+    const formattedTime = formatTime(timeSeconds);
+    const bookmark = {
+      id: "bookmark_" + Date.now(),
+      videoId: currentVideoId,
+      timeSeconds: timeSeconds,
+      label: "Bookmark at " + formattedTime,
+      createdAt: new Date().toISOString()
+    };
+
+    bookmarks.push(bookmark);
+    saveBookmarks();
+    renderBookmarks();
+    showStatus("");
+  }
+
+  function deleteBookmark(bookmarkId) {
+    bookmarks = bookmarks.filter(function (bookmark) {
+      return bookmark.id !== bookmarkId;
+    });
+    saveBookmarks();
+    renderBookmarks();
+  }
+
+  function jumpToBookmark(bookmarkId) {
+    const bookmark = bookmarks.find(function (item) {
+      return item.id === bookmarkId;
+    });
+    if (!bookmark) {
+      return;
+    }
+
+    if (bookmark.videoId !== currentVideoId) {
+      loadVideo(bookmark.videoId, bookmark.timeSeconds, true);
+      pendingSeekSeconds = bookmark.timeSeconds;
+      return;
+    }
+
+    if (!ensurePlayerReady()) {
+      pendingSeekSeconds = bookmark.timeSeconds;
+      return;
+    }
+
+    player.seekTo(bookmark.timeSeconds, true);
+    player.playVideo();
+    updateCurrentTime();
+  }
+
+  function saveBookmarks() {
+    setStoredJson(STORAGE_KEYS.bookmarks, bookmarks);
+  }
+
+  function loadBookmarks() {
+    const saved = getStoredJson(STORAGE_KEYS.bookmarks, []);
+    return Array.isArray(saved) ? saved : [];
+  }
+
+  function renderBookmarks() {
+    const visibleBookmarks = bookmarks
+      .filter(function (bookmark) {
+        return currentVideoId ? bookmark.videoId === currentVideoId : false;
+      })
+      .sort(function (a, b) {
+        return a.timeSeconds - b.timeSeconds;
+      });
+
+    elements.bookmarkList.innerHTML = "";
+    visibleBookmarks.forEach(function (bookmark) {
+      const item = document.createElement("li");
+      item.className = "bookmark-item";
+
+      const jumpButton = document.createElement("button");
+      jumpButton.type = "button";
+      jumpButton.className = "bookmark-jump";
+      jumpButton.addEventListener("click", function () {
+        jumpToBookmark(bookmark.id);
+      });
+
+      const time = document.createElement("span");
+      time.className = "bookmark-time";
+      time.textContent = formatTime(bookmark.timeSeconds);
+
+      const label = document.createElement("span");
+      label.className = "bookmark-label";
+      label.textContent = bookmark.label;
+
+      jumpButton.append(time, label);
+
+      const actions = document.createElement("div");
+      actions.className = "bookmark-actions";
+
+      const goButton = document.createElement("button");
+      goButton.type = "button";
+      goButton.textContent = "Jump to Bookmark";
+      goButton.addEventListener("click", function () {
+        jumpToBookmark(bookmark.id);
+      });
+
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "danger";
+      deleteButton.textContent = "Delete Bookmark";
+      deleteButton.addEventListener("click", function () {
+        deleteBookmark(bookmark.id);
+      });
+
+      actions.append(goButton, deleteButton);
+      item.append(jumpButton, actions);
+      elements.bookmarkList.appendChild(item);
+    });
+  }
+
+  function formatTime(seconds) {
+    const safeSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+    const hours = Math.floor(safeSeconds / 3600);
+    const minutes = Math.floor((safeSeconds % 3600) / 60);
+    const remainingSeconds = safeSeconds % 60;
+
+    if (hours > 0) {
+      return [
+        String(hours).padStart(2, "0"),
+        String(minutes).padStart(2, "0"),
+        String(remainingSeconds).padStart(2, "0")
+      ].join(":");
+    }
+
+    return [
+      String(minutes).padStart(2, "0"),
+      String(remainingSeconds).padStart(2, "0")
+    ].join(":");
+  }
+
+  function updateCurrentTime() {
+    if (!playerReady || !player || typeof player.getCurrentTime !== "function") {
+      elements.currentTime.textContent = "00:00";
+      return;
+    }
+    elements.currentTime.textContent = formatTime(player.getCurrentTime());
+  }
+
+  function saveLastPosition() {
+    if (!playerReady || !currentVideoId || !player || typeof player.getCurrentTime !== "function") {
+      return;
+    }
+    positionsByVideo[currentVideoId] = Math.floor(player.getCurrentTime() || 0);
+    setStoredJson(STORAGE_KEYS.positions, positionsByVideo);
+  }
+
+  function loadLastPosition(videoId) {
+    const savedPosition = Number(positionsByVideo[videoId] || 0);
+    return Number.isFinite(savedPosition) ? savedPosition : 0;
+  }
+
+  function attachPlayer(videoId, startSeconds) {
+    ensurePlayerElement(videoId, startSeconds);
+    playerReady = false;
+    player = new YT.Player("player", {
+      events: {
+        onReady: onPlayerReady,
+        onStateChange: onPlayerStateChange
+      }
+    });
+  }
+
+  function loadPlayerVideo(videoId, startSeconds, shouldPlay) {
+    if (!playerReady) {
+      ensurePlayerElement(videoId, startSeconds);
+      return;
+    }
+
+    if (!shouldPlay && typeof player.cueVideoById === "function") {
+      player.cueVideoById({
+        videoId: videoId,
+        startSeconds: startSeconds
+      });
+      return;
+    }
+
+    player.loadVideoById({
+      videoId: videoId,
+      startSeconds: startSeconds
+    });
+    if (!shouldPlay) {
+      player.pauseVideo();
+    }
+  }
+
+  function applyPendingPlayback() {
+    if (!playerReady || !player || pendingSeekSeconds === null) {
+      return;
+    }
+    if (pendingVideoId && pendingVideoId !== currentVideoId) {
+      return;
+    }
+
+    player.seekTo(pendingSeekSeconds, true);
+    if (pendingShouldPlay) {
+      player.playVideo();
+    } else {
+      player.pauseVideo();
+    }
+    pendingSeekSeconds = null;
+    pendingShouldPlay = false;
+  }
+
+  function loadPositions() {
+    const saved = getStoredJson(STORAGE_KEYS.positions, {});
+    return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+  }
+
+  function saveCurrentVideo() {
+    if (currentVideoId) {
+      setStoredValue(STORAGE_KEYS.lastVideoId, currentVideoId);
+      elements.videoInput.value = currentVideoId;
+    }
+  }
+
+  function ensurePlayerElement(videoId, startSeconds) {
+    const container = document.getElementById("player-container");
+    let iframe = document.getElementById("player");
+    if (!videoId) {
+      return iframe;
+    }
+
+    const embedUrl = buildEmbedUrl(videoId, startSeconds);
+    if (!iframe || iframe.tagName.toLowerCase() !== "iframe") {
+      container.innerHTML = "";
+      iframe = document.createElement("iframe");
+      iframe.id = "player";
+      iframe.title = "YouTube video player";
+      iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+      iframe.allowFullscreen = true;
+      container.appendChild(iframe);
+    }
+
+    if (iframe.getAttribute("src") !== embedUrl) {
+      iframe.setAttribute("src", embedUrl);
+    }
+    return iframe;
+  }
+
+  function buildEmbedUrl(videoId, startSeconds) {
+    const params = new URLSearchParams(getPlayerVars(startSeconds));
+    params.set("enablejsapi", "1");
+    params.set("origin", window.location.origin);
+    return "https://www.youtube.com/embed/" + encodeURIComponent(videoId) + "?" + params.toString();
+  }
+
+  function getPlayerVars(startSeconds) {
+    const vars = {
+      controls: 1,
+      playsinline: 1,
+      rel: 0
+    };
+
+    if (startSeconds > 0) {
+      vars.start = Math.floor(startSeconds);
+    }
+
+    return vars;
+  }
+
+  function updateVideoTitle() {
+    elements.currentVideoTitle.textContent = currentVideoId ? "Current video: " + currentVideoId : "No video loaded";
+  }
+
+  function updatePlayPauseLabel(playerState) {
+    if (playerState === YT.PlayerState.PLAYING) {
+      elements.playPause.textContent = "Pause";
+      return;
+    }
+    elements.playPause.textContent = "Play/Pause";
+  }
+
+  function ensurePlayerReady() {
+    if (!playerReady || !player) {
+      showStatus("Player is still loading.");
+      return false;
+    }
+    return true;
+  }
+
+  function showStatus(message) {
+    elements.status.textContent = message;
+  }
+
+  function checkStorage() {
+    try {
+      const testKey = "ytab:storage-test";
+      window.localStorage.setItem(testKey, "1");
+      window.localStorage.removeItem(testKey);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function getStoredValue(key) {
+    if (!storageAvailable) {
+      return null;
+    }
+    try {
+      return window.localStorage.getItem(key);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function setStoredValue(key, value) {
+    if (!storageAvailable) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (error) {
+      storageAvailable = false;
+      showStatus("Bookmarks may not persist in this browser.");
+    }
+  }
+
+  function getStoredJson(key, fallback) {
+    const value = getStoredValue(key);
+    if (!value) {
+      return fallback;
+    }
+    try {
+      return JSON.parse(value);
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  function setStoredJson(key, value) {
+    setStoredValue(key, JSON.stringify(value));
+  }
+})();
