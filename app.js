@@ -8,6 +8,7 @@
     history: "ytab:videoHistory"
   };
   const MAX_BOOKMARKS = 3;
+  const PLAYBACK_RATE = 0.75;
 
   let player = null;
   let playerReady = false;
@@ -247,6 +248,7 @@
       if (!ensurePlayerMethodReady("pauseVideo")) {
         return;
       }
+      applyPlaybackRate();
       player.pauseVideo();
       postPlayerCommand("pauseVideo");
     } else {
@@ -254,6 +256,7 @@
         ? Math.floor(getReliableCurrentTime())
         : loadLastPosition(currentVideoId);
 
+      applyPlaybackRate();
       if (state === YT.PlayerState.PAUSED && canUsePlayerMethod("playVideo")) {
         player.playVideo();
         postPlayerCommand("playVideo");
@@ -281,6 +284,7 @@
     if (duration > 0) {
       nextTime = Math.min(duration, nextTime);
     }
+    applyPlaybackRate();
     player.seekTo(nextTime, true);
     postPlayerCommand("seekTo", [nextTime, true]);
     updateCurrentTime();
@@ -339,8 +343,10 @@
       return;
     }
 
+    applyPlaybackRate();
     player.seekTo(bookmark.timeSeconds, true);
     player.playVideo();
+    postPlayerCommand("playVideo");
     updateCurrentTime();
   }
 
@@ -499,6 +505,7 @@
 
     loadPlayerVideoAt(videoId, startSeconds, shouldPlay);
     if (!shouldPlay) {
+      applyPlaybackRate();
       player.pauseVideo();
     }
   }
@@ -518,6 +525,7 @@
       return;
     }
 
+    applyPlaybackRate();
     player.seekTo(pendingSeekSeconds, true);
     postPlayerCommand("seekTo", [pendingSeekSeconds, true]);
     if (pendingShouldPlay) {
@@ -537,18 +545,22 @@
   }
 
   function loadPlayerVideoAt(videoId, startSeconds, shouldPlay) {
+    applyPlaybackRate();
     player.loadVideoById(videoId, startSeconds);
     loadedVideoId = videoId;
 
     window.setTimeout(function () {
       if (currentVideoId === videoId && canUsePlayerMethod("seekTo")) {
+        applyPlaybackRate();
         player.seekTo(startSeconds, true);
       }
       if (currentVideoId === videoId && shouldPlay && canUsePlayerMethod("playVideo")) {
+        applyPlaybackRate();
         player.playVideo();
         postPlayerCommand("playVideo");
       }
       if (currentVideoId === videoId && !shouldPlay && canUsePlayerMethod("pauseVideo")) {
+        applyPlaybackRate();
         player.pauseVideo();
         postPlayerCommand("pauseVideo");
       }
@@ -665,6 +677,7 @@
       button.type = "button";
       button.className = "video-history-button";
       button.addEventListener("click", function () {
+        applyPlaybackRate();
         loadVideo(video.videoId, video.lastPosition || 0, false);
         setActiveTab("last");
       });
@@ -742,6 +755,17 @@
 
   function canUsePlayerMethod(methodName) {
     return Boolean(player && typeof player[methodName] === "function");
+  }
+
+  function applyPlaybackRate() {
+    if (canUsePlayerMethod("setPlaybackRate")) {
+      try {
+        player.setPlaybackRate(PLAYBACK_RATE);
+      } catch (error) {
+        // Fall through to postMessage; some iframe states reject direct calls.
+      }
+    }
+    postPlayerCommand("setPlaybackRate", [PLAYBACK_RATE]);
   }
 
   function getReliableCurrentTime() {
