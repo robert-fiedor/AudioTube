@@ -317,20 +317,12 @@ input {
   height: 100%;
 }
 
-.diagnostics-output {
-  max-height: 460px;
-  margin: 12px 0 0;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px;
-  color: var(--ink);
-  background: #05070a;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.78rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.diagnostics-panel {
+  margin-top: 14px;
+}
+
+#copy-diagnostics {
+  width: 100%;
 }
 
 @media (min-width: 560px) {

@@ -46,7 +46,6 @@
     }
     renderBookmarks();
     renderVideoHistory();
-    renderDiagnostics();
     updateVideoTitle();
     loadYouTubeApi();
 
@@ -56,7 +55,6 @@
 
     setInterval(updateCurrentTime, 750);
     setInterval(saveLastPosition, 5000);
-    setInterval(renderDiagnostics, 1000);
   }
 
   function cacheElements() {
@@ -78,7 +76,7 @@
     elements.currentTime = document.getElementById("current-time");
     elements.status = document.getElementById("status-message");
     elements.currentVideoTitle = document.getElementById("current-video-title");
-    elements.diagnosticsOutput = document.getElementById("diagnostics-output");
+    elements.copyDiagnostics = document.getElementById("copy-diagnostics");
   }
 
   function bindEvents() {
@@ -102,6 +100,7 @@
       seekBy(30);
     });
     elements.addBookmark.addEventListener("click", addBookmark);
+    elements.copyDiagnostics.addEventListener("click", copyDiagnosticsToClipboard);
     elements.lastPlayedTab.addEventListener("click", function () {
       setActiveTab("last");
     });
@@ -316,7 +315,6 @@
     bookmarks = limitBookmarksPerVideo(bookmarks, MAX_BOOKMARKS_PER_VIDEO);
     saveBookmarks();
     renderBookmarks();
-    renderDiagnostics();
     showStatus("");
   }
 
@@ -326,7 +324,6 @@
     });
     saveBookmarks();
     renderBookmarks();
-    renderDiagnostics();
   }
 
   function jumpToBookmark(bookmarkId) {
@@ -447,11 +444,29 @@
     });
   }
 
-  function renderDiagnostics() {
-    if (!elements.diagnosticsOutput) {
-      return;
+  async function copyDiagnosticsToClipboard() {
+    const text = JSON.stringify(getDiagnosticsSnapshot(), null, 2);
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+    } catch (error) {
+      // Try the fallback below for browsers that block navigator.clipboard.
     }
-    elements.diagnosticsOutput.textContent = JSON.stringify(getDiagnosticsSnapshot(), null, 2);
+    fallbackCopyText(text);
+  }
+
+  function fallbackCopyText(text) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "");
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    textarea.remove();
   }
 
   function getDiagnosticsSnapshot() {
