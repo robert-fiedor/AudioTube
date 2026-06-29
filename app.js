@@ -7,7 +7,7 @@
     positions: "ytab:lastPositionByVideo",
     history: "ytab:videoHistory"
   };
-  const MAX_BOOKMARKS = 3;
+  const MAX_BOOKMARKS_PER_VIDEO = 3;
   const PLAYBACK_RATE = 0.75;
 
   let player = null;
@@ -313,7 +313,7 @@
     };
 
     bookmarks.push(bookmark);
-    bookmarks = getMostRecentBookmarks(bookmarks, MAX_BOOKMARKS);
+    bookmarks = limitBookmarksPerVideo(bookmarks, MAX_BOOKMARKS_PER_VIDEO);
     saveBookmarks();
     renderBookmarks();
     renderDiagnostics();
@@ -362,20 +362,25 @@
   function loadBookmarks() {
     const saved = getStoredJson(STORAGE_KEYS.bookmarks, []);
     const storedBookmarks = Array.isArray(saved) ? saved : [];
-    const recentBookmarks = getMostRecentBookmarks(storedBookmarks, MAX_BOOKMARKS);
+    const recentBookmarks = limitBookmarksPerVideo(storedBookmarks, MAX_BOOKMARKS_PER_VIDEO);
     if (recentBookmarks.length !== storedBookmarks.length) {
       setStoredJson(STORAGE_KEYS.bookmarks, recentBookmarks);
     }
     return recentBookmarks;
   }
 
-  function getMostRecentBookmarks(items, limit) {
+  function limitBookmarksPerVideo(items, limit) {
+    const countsByVideo = {};
     return items
       .slice()
       .sort(function (a, b) {
         return getBookmarkCreatedAtMs(b) - getBookmarkCreatedAtMs(a);
       })
-      .slice(0, limit);
+      .filter(function (bookmark) {
+        const videoKey = bookmark && bookmark.videoId ? bookmark.videoId : "__missing_video__";
+        countsByVideo[videoKey] = (countsByVideo[videoKey] || 0) + 1;
+        return countsByVideo[videoKey] <= limit;
+      });
   }
 
   function getBookmarkCreatedAtMs(bookmark) {
@@ -479,7 +484,7 @@
       app: {
         name: "BookTube",
         namespace: "ytab",
-        maxBookmarks: MAX_BOOKMARKS,
+        maxBookmarksPerVideo: MAX_BOOKMARKS_PER_VIDEO,
         playbackRate: PLAYBACK_RATE,
         storageAvailable: storageAvailable
       },
