@@ -46,6 +46,7 @@
     }
     renderBookmarks();
     renderVideoHistory();
+    renderDiagnostics();
     updateVideoTitle();
     loadYouTubeApi();
 
@@ -55,6 +56,7 @@
 
     setInterval(updateCurrentTime, 750);
     setInterval(saveLastPosition, 5000);
+    setInterval(renderDiagnostics, 1000);
   }
 
   function cacheElements() {
@@ -76,6 +78,7 @@
     elements.currentTime = document.getElementById("current-time");
     elements.status = document.getElementById("status-message");
     elements.currentVideoTitle = document.getElementById("current-video-title");
+    elements.diagnosticsOutput = document.getElementById("diagnostics-output");
   }
 
   function bindEvents() {
@@ -313,6 +316,7 @@
     bookmarks = getMostRecentBookmarks(bookmarks, MAX_BOOKMARKS);
     saveBookmarks();
     renderBookmarks();
+    renderDiagnostics();
     showStatus("");
   }
 
@@ -322,6 +326,7 @@
     });
     saveBookmarks();
     renderBookmarks();
+    renderDiagnostics();
   }
 
   function jumpToBookmark(bookmarkId) {
@@ -435,6 +440,138 @@
       item.append(jumpButton, actions);
       elements.bookmarkList.appendChild(item);
     });
+  }
+
+  function renderDiagnostics() {
+    if (!elements.diagnosticsOutput) {
+      return;
+    }
+    elements.diagnosticsOutput.textContent = JSON.stringify(getDiagnosticsSnapshot(), null, 2);
+  }
+
+  function getDiagnosticsSnapshot() {
+    const appStorage = {};
+    Object.keys(STORAGE_KEYS).forEach(function (name) {
+      const key = STORAGE_KEYS[name];
+      appStorage[name] = {
+        key: key,
+        raw: getStoredValue(key),
+        parsed: getStoredJson(key, null)
+      };
+    });
+
+    const currentVideoBookmarks = bookmarks
+      .filter(function (bookmark) {
+        return currentVideoId ? bookmark.videoId === currentVideoId : false;
+      })
+      .sort(function (a, b) {
+        return getBookmarkCreatedAtMs(b) - getBookmarkCreatedAtMs(a);
+      });
+
+    return {
+      generatedAt: new Date().toISOString(),
+      page: {
+        href: window.location.href,
+        origin: window.location.origin,
+        pathname: window.location.pathname,
+        sameOriginLocalStorageNote: "GitHub Pages localStorage is shared by origin, so every robert-fiedor.github.io path can see the same keys."
+      },
+      app: {
+        name: "BookTube",
+        namespace: "ytab",
+        maxBookmarks: MAX_BOOKMARKS,
+        playbackRate: PLAYBACK_RATE,
+        storageAvailable: storageAvailable
+      },
+      player: {
+        currentVideoId: currentVideoId,
+        loadedVideoId: loadedVideoId,
+        playerReady: playerReady,
+        youtubeApiReady: youtubeApiReady,
+        pendingVideoId: pendingVideoId,
+        pendingSeekSeconds: pendingSeekSeconds,
+        pendingShouldPlay: pendingShouldPlay,
+        currentTimeText: elements.currentTime ? elements.currentTime.textContent : null,
+        currentVideoTitle: elements.currentVideoTitle ? elements.currentVideoTitle.textContent : null
+      },
+      memoryState: {
+        bookmarksCount: bookmarks.length,
+        currentVideoBookmarksCount: currentVideoBookmarks.length,
+        positionsByVideoCount: Object.keys(positionsByVideo || {}).length,
+        videoHistoryCount: videoHistory.length,
+        bookmarks: bookmarks,
+        currentVideoBookmarks: currentVideoBookmarks,
+        positionsByVideo: positionsByVideo,
+        videoHistory: videoHistory
+      },
+      appStorage: appStorage,
+      originLocalStorage: getOriginLocalStorageSnapshot()
+    };
+  }
+
+  function getOriginLocalStorageSnapshot() {
+    const snapshot = {
+      available: storageAvailable,
+      length: 0,
+      keys: [],
+      entries: []
+    };
+
+    if (!storageAvailable) {
+      return snapshot;
+    }
+
+    try {
+      snapshot.length = window.localStorage.length;
+      for (let index = 0; index < window.localStorage.length; index += 1) {
+        const key = window.localStorage.key(index);
+        const raw = window.localStorage.getItem(key);
+        snapshot.keys.push(key);
+        snapshot.entries.push({
+          key: key,
+          appKey: Object.keys(STORAGE_KEYS).some(function (name) {
+            return STORAGE_KEYS[name] === key;
+          }),
+          valueType: getStoredValueType(raw),
+          rawLength: raw ? raw.length : 0,
+          raw: raw,
+          parsed: parseStoredValue(raw)
+        });
+      }
+      snapshot.keys.sort();
+      snapshot.entries.sort(function (a, b) {
+        return a.key.localeCompare(b.key);
+      });
+    } catch (error) {
+      snapshot.error = String(error && error.message || error);
+    }
+
+    return snapshot;
+  }
+
+  function getStoredValueType(raw) {
+    if (raw === null) {
+      return "null";
+    }
+    const parsed = parseStoredValue(raw);
+    if (parsed === raw) {
+      return "string";
+    }
+    if (Array.isArray(parsed)) {
+      return "array";
+    }
+    return typeof parsed;
+  }
+
+  function parseStoredValue(raw) {
+    if (raw === null) {
+      return null;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      return raw;
+    }
   }
 
   function formatTime(seconds) {
